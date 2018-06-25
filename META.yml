@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:                HTML-Defang
-version:             1.05
+version:             1.06
 abstract:            Cleans HTML as well as CSS of scripting and other executable contents, and neutralises XSS attacks.
 license:             ~
 author:              
