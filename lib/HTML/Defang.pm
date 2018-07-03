@@ -131,7 +131,7 @@ use 5.008;
 use strict;
 use warnings;
 
-our $VERSION=1.06;
+our $VERSION=1.07;
 
 use constant DEFANG_NONE => 0;
 use constant DEFANG_ALWAYS => 1;
