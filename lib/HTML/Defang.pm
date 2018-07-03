@@ -168,7 +168,7 @@ my $Executables = '([^@]\.com|'.
                   '.*\.(exe|cmd|bat|pif|scr|sys|sct|lnk|dll'.
                   '|vbs?|vbe|hta|shb|shs|hlp|chm|eml|wsf|wsh|js'.
                   '|asx|wm.|mdb|mht|msi|msp|cpl|lib|reg))';
-my $SrcBanStd      = qr/^([A-Za-z]*script|.*\&{|mocha|about|opera|mailto:|hcp:|\/(dev|proc)|\\|file|smb|cid:${Executables}(@|\?|$))/i;
+my $SrcBanStd      = qr/^([A-Za-z]*script|.*\&\{|mocha|about|opera|mailto:|hcp:|\/(dev|proc)|\\|file|smb|cid:${Executables}(@|\?|$))/i;
 
 my %Rules = 
 (
