@@ -1553,7 +1553,7 @@ sub defang_script_tag {
       my $ScriptTagContents = $1;
       warn "defang_script ScriptTagContents $ScriptTagContents" if $Self->{Debug};
       if (!$Self->{delete_defang_content}) {
-        $ScriptTagContents =~ s/<!--|-->|--//g;
+        1 while $ScriptTagContents =~ s/<!--|-->|--//g;
         $ScriptTagContents = "<!-- " . $ScriptTagContents . " -->";
         $Self->add_to_output($ScriptTagContents);
       }
