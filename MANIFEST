@@ -9,4 +9,5 @@ t/03_styles.t
 t/04_imports.t
 t/05_callbacks.t
 t/06_unicode.t
+t/07_rcdata.t
 META.yml                                 Module meta-data (added by MakeMaker)
