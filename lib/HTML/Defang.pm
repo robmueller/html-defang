@@ -851,7 +851,7 @@ implicit options
 
 =item B<delete_defang_content = 1>
 
-=item B<tags_to_callback = [ qw(html head link body meta title bgsound) ]>
+=item B<tags_to_callback = [ qw(html head link body meta title bgsound base) ]>
 
 =item B<tags_callback = { ... remove all above tags and related content ... }>
 
@@ -860,7 +860,9 @@ implicit options
 =back
 
 Basically this is a easy way to remove all html boiler plate
-content and return only the html body content.
+content and return only the html body content. That includes any
+C<< <base> >>, which would otherwise change how every relative URL around
+the content resolves once it's embedded in another page.
 
 =cut
 
@@ -868,7 +870,7 @@ sub new_bodyonly {
   return shift->new(
     fix_mismatched_tags => 1,
     delete_defang_content => 1,
-    tags_to_callback => [ qw(html head link body meta title bgsound) ],
+    tags_to_callback => [ qw(html head link body meta title bgsound base) ],
     tags_callback => sub {
       my (undef, $Defang, $Angle, $lcTag, $IsEndTag, $AttributeHash, $AttributesEnd, $HtmlR, $OutR) = @_;
       $$HtmlR =~ m{\G.*?(?=</title|</head)}gcis if $lcTag eq 'title' && !$IsEndTag;
