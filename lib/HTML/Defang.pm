@@ -783,8 +783,8 @@ directly by a callback are still performed.
 =item B<extract_styles>
 
 If set, C<< <style> >> elements are removed from the output, and their
-defanged contents collected, to be fetched with L</extracted_styles> after
-each call to L</defang>. A C<media> attribute on the element becomes an
+defanged contents collected, to be fetched with C<extracted_styles> after
+each call to C<defang>. A C<media> attribute on the element becomes an
 C<@media> block around its contents. Use this to move a document's styles
 somewhere else, such as into the C<< <head> >> of the page it's embedded in.
 
@@ -801,7 +801,7 @@ B<extract_styles>.
 
 =item B<url_policy>
 
-Set to C<'mail'> to check URLs with L</mail_url_callback>, rather than the
+Set to C<'mail'> to check URLs with C<mail_url_callback>, rather than the
 built in attribute rules: suitable for HTML from an email message. Ignored
 if a B<url_callback> is given.
 
@@ -872,6 +872,7 @@ sub new {
     extract_styles => $Opts{extract_styles},
     scope_id => $Opts{scope_id},
     extracted_styles => '',
+    body_style => '',
     Debug => $Opts{Debug},
   };
 
@@ -920,9 +921,132 @@ sub new_bodyonly {
   );
 }
 
+=item I<HTML::Defang-E<gt>new_quote(%Options)>
+
+Constructs a new HTML::Defang object for quoting the HTML body of an email
+message inside another one, as in a reply or forward. Use it with
+C<quote>. It has the following implicit options, overridable as usual:
+
+=over 4
+
+=item B<fix_mismatched_tags = 1>, B<delete_defang_content = 1>, B<quiet = 1>
+
+=item B<extract_styles = 1>
+
+=item B<scope_id = 'qt'>
+
+=item B<url_policy = 'mail'>
+
+=item B<tags_to_callback = [ qw(html head link body meta title bgsound base) ]>
+
+=item B<tags_callback = { ... remove all above tags and related content, keeping the body's style for C<quote> ... }>
+
+=back
+
+=cut
+
+sub new_quote {
+  return shift->new(
+    fix_mismatched_tags => 1,
+    delete_defang_content => 1,
+    quiet => 1,
+    extract_styles => 1,
+    scope_id => 'qt',
+    url_policy => 'mail',
+    tags_to_callback => [ qw(html head link body meta title bgsound base) ],
+    tags_callback => \&quote_tags_callback,
+    @_
+  );
+}
+
+sub quote_tags_callback {
+  my (undef, $Defang, $Angle, $lcTag, $IsEndTag, $AttributeHash, $AttributesEnd, $HtmlR, $OutR) = @_;
+  $$HtmlR =~ m{\G.*?(?=</title|</head)}gcis if $lcTag eq 'title' && !$IsEndTag;
+  $Defang->{body_style} = $Defang->defang_body_style($AttributeHash, $HtmlR, $OutR)
+    if $lcTag eq 'body' && !$IsEndTag;
+  return DEFANG_ALWAYS;
+}
+
+# The <body>'s presentation as a style attribute value for whatever element
+#  replaces it, without the sizing and positioning a body uses to fill the
+#  window, which on an element within a page would clip or misplace it
+my %BodyAttributeStyles = (bgcolor => 'background-color', text => 'color');
+
+sub defang_body_style {
+  my ($Self, $AttributeHash, $HtmlR, $OutR) = @_;
+
+  my @Styles;
+  for my $Attr (sort keys %BodyAttributeStyles) {
+    my $ValR = $AttributeHash->{$Attr};
+    push @Styles, "$BodyAttributeStyles{$Attr}: $$ValR"
+      if $ValR && defined $$ValR && $$ValR =~ $Rules{color};
+  }
+
+  if (my $ValR = $AttributeHash->{style}) {
+    my $UserCallback = $Self->{css_callback};
+    local $Self->{css_callback} = sub {
+      my ($Context, $Defang, $Selectors, $SelectorRules) = @_;
+      $UserCallback->(@_) if $UserCallback;
+      for my $KeyValueRule (map { @$_ } map { @$_ } @$SelectorRules) {
+        $KeyValueRule->[2] = DEFANG_ALWAYS
+          if $KeyValueRule->[0] =~ /^\s*(?:(?:min-|max-)?height|overflow(?:-[xy])?|position)\s*$/i;
+      }
+    };
+    my $Style = $Self->defang_style_text(defined $$ValR ? $$ValR : '', 'body', 1, $AttributeHash, $HtmlR, $OutR);
+    $Style =~ s/^[\s;]+|[\s;]+$//g;
+    push @Styles, $Style if length $Style;
+  }
+
+  return join '; ', @Styles;
+}
+
+=item I<quote($InputHtml)>
+
+Defang the HTML body of an email message for quoting, with an object from
+C<new_quote>. Returns a hash reference of:
+
+=over 4
+
+=item B<html>
+
+The body's content, to put inside an element with the B<scope_id>.
+
+=item B<styles>
+
+The message's CSS, scoped to that element, for a C<< <style> >> in the
+C<< <head> >> of the new message.
+
+=item B<body_style>
+
+A CSS declaration list from the original C<< <body> >>, for that element's
+C<style> attribute. It is not HTML escaped.
+
+=back
+
+For example:
+
+  my $Quote = HTML::Defang->new_quote->quote($OriginalHtml);
+  my $Html = qq{<!DOCTYPE html><html><head><style>$Quote->{styles}</style></head><body>}
+    . qq{<p>My reply</p><blockquote type="cite" id="qt" style="}
+    . escape_html($Quote->{body_style}) . qq{">$Quote->{html}</blockquote></body></html>};
+
+=cut
+
+sub quote {
+  my ($Self, $Html) = @_;
+
+  my $Out = $Self->defang($Html);
+
+  return {
+    html => $Out,
+    styles => $Self->{extracted_styles},
+    body_style => $Self->{body_style},
+  };
+}
+
 =item I<mail_url_callback(...)>
 
-A B<url_callback> (see L</url_callback>) for HTML from an email message,
+A B<url_callback> (see C<url_callback>) for HTML from an email message,
 used by C<< url_policy => 'mail' >>. A link (C<href>) may go to an http(s),
 mailto, tel or cid URL, or an anchor in the message. Anything the client
 loads itself (C<src>, C<background>, CSS C<url()>) may only come from an
@@ -1250,7 +1374,7 @@ sub defang {
   warn("defang FallbackCharset=$FallbackCharset") if $Debug;
 
   # Per document results, reset by the outermost call
-  $Self->{extracted_styles} = '' if ++$Self->{Reentrant} == 1;
+  @$Self{qw(extracted_styles body_style)} = ('', '') if ++$Self->{Reentrant} == 1;
 
   # Output buffer
   local $Self->{OutR} = $Opts->{add_to_existing} ? $Self->{OutR} : \(my $O = "");
@@ -1532,7 +1656,7 @@ sub defang {
 =item I<extracted_styles()>
 
 With B<extract_styles> set, the defanged contents of the C<< <style> >>
-elements removed by the last call to L</defang>, ready to be put in a
+elements removed by the last call to C<defang>, ready to be put in a
 C<< <style> >> element of their own.
 
 =cut

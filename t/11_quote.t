@@ -4,7 +4,7 @@ BEGIN { # CPAN users don't have ME::*, so use eval
   eval 'use ME::FindLibs'
 }
 
-use Test::More tests => 35;
+use Test::More tests => 42;
 use HTML::Defang;
 
 use strict;
@@ -115,3 +115,28 @@ like($R, qr{<a href="#qt-c">to c</a><a name="qt-n">n</a><a href="#">top</a>}, "A
 like($R, qr{<label for="qt-k">L</label><img usemap="#qt-map"><map name="qt-map"></map>}, "for, usemap and map name prefixed");
 
 ok(!eval { HTML::Defang->new(scope_id => 'a b'); 1 }, "Invalid scope_id dies");
+
+#################################
+#  new_quote/quote
+#################################
+
+$D = HTML::Defang->new_quote();
+
+my $Q = $D->quote(<<'EOF');
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Promo</title><base href="http://example.com/">
+<style>body { color: red } td.x { background: url(cid:bg@example.com) }</style><script>bad()</script></head>
+<body bgcolor="#eee" text="navy" style="margin: 0; height: 100%; overflow: hidden; font-family: Arial">
+<!--[if mso]>junk<![endif]--><table><tr><td class="x">Big <b>sale</b> <a href="javascript:x()">js</a>
+<img src="cid:i1@example.com"></td></tr></table></blockquote><div>unclosed
+</body></html>
+EOF
+
+unlike($Q->{html}, qr{DOCTYPE|<html|<head|<meta|<title|Promo|<base|<style|<script|bad\(\)|<body|junk|<!--}i, "Boilerplate, head, scripts and comments removed");
+like($Q->{html}, qr{<td class="qt-x">Big <b>sale</b> <a >js</a>\n<img src="cid:i1\@example.com"></td>}, "Content kept, scoped, and URLs checked");
+unlike($Q->{html}, qr{</blockquote>}, "Stray end tag that would close the quote removed");
+like($Q->{html}, qr{<div>unclosed\s*</div>\s*$}, "Unclosed tag closed");
+is($Q->{styles}, "#qt { color: red } #qt td.qt-x { background: url(cid:bg\@example.com) }\n", "Styles extracted and scoped");
+is($Q->{body_style}, "background-color: #eee; color: navy; margin: 0; font-family: Arial", "Body presentation kept, without its sizing");
+
+$Q = $D->quote('<p>Plain</p>');
+is_deeply($Q, { html => '<p>Plain</p>', styles => '', body_style => '' }, "Nothing left over from the previous quote");
