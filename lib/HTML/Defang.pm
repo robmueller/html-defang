@@ -138,6 +138,7 @@ use constant DEFANG_ALWAYS => 1;
 use constant DEFANG_DEFAULT => 2;
 
 use Encode;
+use Carp ();
 
 my $HasScalarReadonly = 0;
 BEGIN { eval "use Scalar::Readonly qw(readonly_on);" && ($HasScalarReadonly = 1); }
@@ -779,6 +780,12 @@ modification, even if they are flagged to be defanged by the
 return value of a callback.  Any tag or attribute modifications made
 directly by a callback are still performed.
 
+=item B<url_policy>
+
+Set to C<'mail'> to check URLs with L</mail_url_callback>, rather than the
+built in attribute rules: suitable for HTML from an email message. Ignored
+if a B<url_callback> is given.
+
 =item B<delete_defang_content>
 
 Normally defanged tags are turned into comments and prefixed by defang_,
@@ -812,6 +819,13 @@ sub new {
   my %mismatched_tags_to_fix = %MismatchedTags;
   %mismatched_tags_to_fix = map { $_ => 1 } @$mismatched_tags_to_fix if $mismatched_tags_to_fix;
 
+  my $url_callback = $Opts{url_callback};
+  if (!$url_callback && defined $Opts{url_policy}) {
+    $Opts{url_policy} eq 'mail'
+      or Carp::croak("Unknown url_policy: $Opts{url_policy}");
+    $url_callback = \&mail_url_callback;
+  }
+
   my $Self = {
     defang_string => 'defang_',
     defang_re => qr/^defang_/,
@@ -821,7 +835,7 @@ sub new {
     tags_callback => $Opts{tags_callback},
     attribs_to_callback => \%attribs_to_callback,
     attribs_callback => $Opts{attribs_callback},
-    url_callback => $Opts{url_callback},
+    url_callback => $url_callback,
     css_callback => $Opts{css_callback},
     content_callback => $Opts{content_callback},
     mismatched_tags_to_fix => \%mismatched_tags_to_fix,
@@ -879,6 +893,32 @@ sub new_bodyonly {
     url_callback => sub { return DEFANG_NONE; },
     @_
   );
+}
+
+=item I<mail_url_callback(...)>
+
+A B<url_callback> (see L</url_callback>) for HTML from an email message,
+used by C<< url_policy => 'mail' >>. A link (C<href>) may go to an http(s),
+mailto, tel or cid URL, or an anchor in the message. Anything the client
+loads itself (C<src>, C<background>, CSS C<url()>) may only come from an
+http(s) or cid URL, or be an inline raster image in a C<data:> URL. Anything
+else is defanged, including relative URLs, which have nothing to resolve
+against in a message.
+
+=cut
+
+my $MailLinkRE = qr/^(?:(?:https?|mailto|tel|cid):|#)/i;
+my $MailLoadRE = qr{^(?:(?:https?|cid):|data:image/(?:png|gif|jpe?g|webp|bmp);base64,)}i;
+
+sub mail_url_callback {
+  my (undef, $Defang, $lcTag, $lcAttrKey, $AttrValR) = @_;
+
+  # The stripped value is what a browser would see, with entities, escapes,
+  #  control chars and leading space already undone
+  my $Url = $Defang->strip_attribute($$AttrValR);
+  my $IsLink = defined $lcAttrKey && $lcAttrKey eq 'href';
+
+  return $Url =~ ($IsLink ? $MailLinkRE : $MailLoadRE) ? DEFANG_NONE : DEFANG_ALWAYS;
 }
 
 =back
