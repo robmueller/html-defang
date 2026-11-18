@@ -1923,14 +1923,20 @@ sub defang_stylerule {
       my $DefangStyleRule = $Self->{defang_default};
 
       # If the style value has a URL in it and URL callback has been supplied, make a url_callback
+      # Check every url() in the value (there can be several, e.g. layered
+      #  backgrounds), and defang the declaration if any of them is defanged
       if ($Self->{url_callback}) {
         our $StartPos = 0;
-        while ($Value =~ m/\G\s*url\(\s*((?:['"])?)(?{ $StartPos = pos; })(.*?)\1\s*\)/gci) {
+        my $AnyUrlDefanged = 0;
+        while ($Value =~ m/\burl\(\s*((?:['"])?)(?{ $StartPos = pos; })(.*?)\1\s*\)/gci) {
           my ($UrlOrig, $Url) = $2 ? ($2, $2) : ('', '');
           my $EndPos = pos($Value);
           warn "defang_stylerule Url found in style property value. Url=$Url" if $Self->{Debug};
           my $lcAttrKey = $IsAttr ? "style" : undef;
-          $DefangStyleRule = $Self->{url_callback}->($Self->{context}, $Self, $lcTag, $lcAttrKey, \$Url, $AttributeHash, $HtmlR, $OutR, lc $Key) if $Url;
+          if ($Url) {
+            $DefangStyleRule = $Self->{url_callback}->($Self->{context}, $Self, $lcTag, $lcAttrKey, \$Url, $AttributeHash, $HtmlR, $OutR, lc $Key);
+            $AnyUrlDefanged = 1 if defined $DefangStyleRule && $DefangStyleRule == DEFANG_ALWAYS;
+          }
           # Save back any changes
           warn "defang_stylerule After URL callback, Value=$Value DefangStyleRule=$DefangStyleRule" if $Self->{Debug};
           if ($UrlOrig) {
@@ -1938,6 +1944,7 @@ sub defang_stylerule {
             pos($Value) = $EndPos - length($UrlOrig) + length($Url);
           }
         }
+        $DefangStyleRule = DEFANG_ALWAYS if $AnyUrlDefanged;
       }
 
       # Save the style property, value and defang flag      
