@@ -780,6 +780,14 @@ modification, even if they are flagged to be defanged by the
 return value of a callback.  Any tag or attribute modifications made
 directly by a callback are still performed.
 
+=item B<extract_styles>
+
+If set, C<< <style> >> elements are removed from the output, and their
+defanged contents collected, to be fetched with L</extracted_styles> after
+each call to L</defang>. A C<media> attribute on the element becomes an
+C<@media> block around its contents. Use this to move a document's styles
+somewhere else, such as into the C<< <head> >> of the page it's embedded in.
+
 =item B<url_policy>
 
 Set to C<'mail'> to check URLs with L</mail_url_callback>, rather than the
@@ -847,6 +855,8 @@ sub new {
     empty_tags_to_collapse => \%empty_tags_to_collapse,
     quiet => $Opts{quiet},
     delete_defang_content => $Opts{delete_defang_content},
+    extract_styles => $Opts{extract_styles},
+    extracted_styles => '',
     Debug => $Opts{Debug},
   };
 
@@ -1224,7 +1234,8 @@ sub defang {
   my $FallbackCharset = $Opts->{fallback_charset};
   warn("defang FallbackCharset=$FallbackCharset") if $Debug;
 
-  $Self->{Reentrant}++;
+  # Per document results, reset by the outermost call
+  $Self->{extracted_styles} = '' if ++$Self->{Reentrant} == 1;
 
   # Output buffer
   local $Self->{OutR} = $Opts->{add_to_existing} ? $Self->{OutR} : \(my $O = "");
@@ -1345,6 +1356,7 @@ sub defang {
 
         }
         die "Callback reset pos on Tag=$Tag IsEndTag=$IsEndTag" if !defined pos($I);
+        goto SkipOutput if delete $Self->{SkipTagOutput};
         warn "defang Defang=$Defang" if $Debug;
 
         # RCDATA/RAWTEXT elements (title, textarea, noembed, noframes): their
@@ -1500,6 +1512,18 @@ sub defang {
   Encode::_utf8_on($$OutR) if $UTF8Input;
 
   return $$OutR;
+}
+
+=item I<extracted_styles()>
+
+With B<extract_styles> set, the defanged contents of the C<< <style> >>
+elements removed by the last call to L</defang>, ready to be put in a
+C<< <style> >> element of their own.
+
+=cut
+sub extracted_styles {
+  my $Self = shift;
+  return $Self->{extracted_styles};
 }
 
 =item I<add_to_output($String)>
@@ -1689,6 +1713,14 @@ sub defang_style_tag {
 
   warn "defang_style_tag Tag=$lcTag IsEndTag=$IsEndTag" if $Self->{Debug};
 
+  my $Extract = $Self->{extract_styles};
+  $Self->{SkipTagOutput} = 1 if $Extract;
+
+  # The media attribute isn't allowed on the tag, but is kept on extracted
+  #  styles as an @media block
+  my ($Media) = map { $Self->cleanup_attribute($_->[4]) }
+    grep { defined $_->[0] && lc $_->[0] eq 'media' && defined $_->[4] } @$Attributes;
+
   # Defang attributes
   my $Defang = $Self->defang_attributes($OutR, $HtmlR, $TagOps, $OpenAngle, $IsEndTag, $lcTag, $TagTrail, $Attributes, $CloseAngle);
 
@@ -1727,6 +1759,16 @@ sub defang_style_tag {
   }
 
   my $StyleOut = $Self->defang_style_text($Content, $lcTag, 0, undef, $HtmlR, $OutR);
+
+  if ($Extract) {
+    return $Defang if $StyleOut !~ /\S/;
+    $StyleOut = "\@media $Media {\n$StyleOut\n}"
+      if defined $Media && $Media =~ $Rules{media} && $Media !~ /^\s*all\s*$/i;
+    # Make sure nothing can end the <style> element it's put into
+    $StyleOut =~ s{</}{<\\/}g;
+    $Self->{extracted_styles} .= "$StyleOut\n";
+    return $Defang;
+  }
 
   $Self->add_to_output($OpeningHtmlComment . $StyleOut . $ClosingHtmlComment);
   $Self->add_to_output("</style>") if !$ClosingStyleTagPresent;

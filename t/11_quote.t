@@ -4,7 +4,7 @@ BEGIN { # CPAN users don't have ME::*, so use eval
   eval 'use ME::FindLibs'
 }
 
-use Test::More tests => 16;
+use Test::More tests => 23;
 use HTML::Defang;
 
 use strict;
@@ -53,3 +53,28 @@ like($R, qr{14:<p style="">}, "javascript CSS url removed");
 like($R, qr{15:<p style="">}, "file CSS url after a good one removed");
 
 ok(!eval { HTML::Defang->new(url_policy => 'nope'); 1 }, "Unknown url_policy dies");
+
+#################################
+#  extract_styles
+#################################
+
+$D = HTML::Defang->new(extract_styles => 1, delete_defang_content => 1);
+
+$R = $D->defang(<<'EOF');
+<style>p { color: red }</style><p>Text</p>
+<style media="print">p { color: black }</style>
+<style>q { color: blue } </div> { x: y }</style>
+<style></style>
+EOF
+
+unlike($R, qr{<style|</style}i, "Style tags removed from output");
+like($R, qr{<p>Text</p>}, "Content kept");
+like($D->extracted_styles, qr{^p \{ color: red \}\n}, "First style extracted");
+like($D->extracted_styles, qr{\@media print \{\np \{ color: black \}\n\}}, "media attribute becomes an \@media block");
+unlike($D->extracted_styles, qr{</}, "Nothing in extracted styles can close a style element");
+
+$D->defang('<p>No styles</p>');
+is($D->extracted_styles, '', "Extracted styles reset on each call");
+
+$R = HTML::Defang->new(extract_styles => 1)->defang('<style>p { color: red }</style>');
+is($R, '', "Style tags removed without delete_defang_content too");
