@@ -1087,6 +1087,13 @@ If $Defang->{css_callback} exists, and HTML::Defang has parsed a <style> tag or 
 
 Reference to an array containing the selectors in a style tag or attribute.
 
+A callback may rewrite a selector in place (for instance to scope it by
+prefixing it), but must not add or remove entries. Each C<@media> block
+appears as an entry for its C<@media ...> prelude and an empty entry for
+its closing brace, and each selector inside it is the prelude and the
+selector joined with a C<\0> character, of which only the part after the
+last C<\0> is output.
+
 =item I<$SelectorRules>
 
 Reference to an array containing the style declaration blocks of all selectors in a style tag or attribute. Consider the below CSS:
@@ -1893,7 +1900,10 @@ A scalar reference to the processed output so far.
 sub defang_stylerule {
   my ($Self, $SelectorsIn, $StyleRules, $lcTag, $IsAttr, $AttributeHash, $HtmlR, $OutR) = @_;
 
-  my (@SelectorStyleKeyValues, %SelectorStyleKeyExtraData);
+  # Formatting of each declaration (whitespace, separators), per rule. Kept
+  #  by position rather than by selector text, so it survives a css_callback
+  #  renaming a selector, and repeated selectors don't overwrite each other
+  my @SelectorStyleKeyExtraData;
 
   my (@Selectors, @SelectorRules);
 
@@ -1939,7 +1949,7 @@ sub defang_stylerule {
     push (@SelectorRule, \@KeyValueRules);
     push (@Selectors, $Selector);
     push (@SelectorRules, \@SelectorRule);
-    $SelectorStyleKeyExtraData{$Selector} = \%StyleKeyExtraData;
+    push @SelectorStyleKeyExtraData, \%StyleKeyExtraData;
 
   }
 
@@ -1953,7 +1963,7 @@ sub defang_stylerule {
   foreach my $Selector (@Selectors) {
 
     my $SelectorRule = $SelectorRules[$Counter];
-    my $ExtraData = $SelectorStyleKeyExtraData{$Selector};
+    my $ExtraData = ($SelectorStyleKeyExtraData[$Counter] ||= {});
     my $Rule;
 
     for (my $j = 0; $j < @$SelectorRule; $j++) {
@@ -1984,7 +1994,7 @@ sub defang_stylerule {
   
     $SelectorsIn->[$Counter] = $Selector if $SelectorsIn->[$Counter] && !$IsAttr;
     my $SelectorRule = $SelectorRules[$Counter];
-    my $ExtraData = $SelectorStyleKeyExtraData{$Selector};
+    my $ExtraData = $SelectorStyleKeyExtraData[$Counter];
     my $Rule;
     
     foreach my $KeyRules (@$SelectorRule) {

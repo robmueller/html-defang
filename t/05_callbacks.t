@@ -4,7 +4,7 @@ BEGIN { # CPAN users don't have ME::*, so use eval
   eval 'use ME::FindLibs'
 }
 
-use Test::More tests => 94;
+use Test::More tests => 98;
 use HTML::Defang;
 use strict;
 
@@ -1105,3 +1105,29 @@ $H = <<EOF;
 <img width=0 style="key:url(http://example.com)"
 EOF
 $Res = $Defang->defang($H);
+
+#################################
+#  Renaming selectors in css callback
+#################################
+
+$Defang = HTML::Defang->new(
+  css_callback => sub {
+    my ($Context, $Defang, $Selectors, $SelectorRules, $Tag, $IsAttr) = @_;
+    for (@$Selectors) {
+      next if $IsAttr || !length;
+      my @Parts = split /\0/;
+      next if $Parts[-1] =~ /^\@/;
+      $Parts[-1] = "#x $Parts[-1]";
+      $_ = join "\0", @Parts;
+    }
+  },
+);
+$H = <<EOF;
+<style>td { padding: 1px;  color : red } p { margin: 0 } td { border: 0 }
+\@media (max-width: 600px) { td { display: block } }</style>
+EOF
+$Res = $Defang->defang($H);
+like($Res, qr{#x td \{ padding: 1px;  color : red \}}, "Renamed selector keeps its declarations intact");
+like($Res, qr{#x p \{ margin: 0 \}}, "Second renamed selector");
+like($Res, qr{#x td \{ border: 0 \}}, "Repeated selector keeps its own declarations");
+like($Res, qr{\@media \(max-width: 600px\) \{ #x td \{ display: block \} \}}, "Selector inside \@media renamed");
