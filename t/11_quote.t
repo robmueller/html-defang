@@ -4,7 +4,7 @@ BEGIN { # CPAN users don't have ME::*, so use eval
   eval 'use ME::FindLibs'
 }
 
-use Test::More tests => 23;
+use Test::More tests => 35;
 use HTML::Defang;
 
 use strict;
@@ -78,3 +78,40 @@ is($D->extracted_styles, '', "Extracted styles reset on each call");
 
 $R = HTML::Defang->new(extract_styles => 1)->defang('<style>p { color: red }</style>');
 is($R, '', "Style tags removed without delete_defang_content too");
+
+#################################
+#  scope_id
+#################################
+
+$D = HTML::Defang->new(scope_id => 'qt', extract_styles => 1, delete_defang_content => 1);
+
+$R = $D->defang(<<'EOF');
+<style>
+body { color: red }
+html body td, .a .b, #c > p.d { padding: 0 }
+body.e, body > table, :root { margin: 0 }
+body + div, html ~ p { dropped: 1 }
+* p, a:not(.f):hover { x: y }
+[class~="g h"], [class*=i], [id^=j], [title="a,b"] { z: 1 }
+@media (max-width: 600px) { .m td { display: block } }
+@font-face { font-family: X }
+</style>
+<div id="c" class="a  b"><a href="#c">to c</a><a name="n">n</a><a href="#">top</a>
+<label for="k">L</label><img usemap="#map"><map name="map"></map></div>
+EOF
+
+my @Rules = split /\n/, $D->extracted_styles;
+is($Rules[1], '#qt { color: red }', "body selector is the scope element");
+is($Rules[2], '#qt td, #qt .qt-a .qt-b, #qt #qt-c > p.qt-d { padding: 0 }', "Selectors scoped, ids and classes prefixed");
+is($Rules[3], '#qt.qt-e, #qt > table, #qt { margin: 0 }', "Compound and child selectors on body, and :root");
+unlike($D->extracted_styles, qr{dropped}, "Rule matching only siblings of html/body dropped");
+is($Rules[4], '#qt p, #qt a:not(.qt-f):hover { x: y }', "Leading * and classes inside :not()");
+is($Rules[5], '#qt [class~="qt-g qt-h"], #qt [class*="i"], #qt [id^="qt-j"], #qt [title="a,b"] { z: 1 }', "Attribute selectors");
+is($Rules[6], '@media (max-width: 600px) { #qt .qt-m td { display: block } }', "Rules inside \@media scoped");
+is($Rules[7], '@font-face { font-family: X }', "Other at-rules left alone");
+
+like($R, qr{<div id="qt-c" class="qt-a  qt-b">}, "id and classes prefixed in markup");
+like($R, qr{<a href="#qt-c">to c</a><a name="qt-n">n</a><a href="#">top</a>}, "Anchor links and names prefixed, bare # left");
+like($R, qr{<label for="qt-k">L</label><img usemap="#qt-map"><map name="qt-map"></map>}, "for, usemap and map name prefixed");
+
+ok(!eval { HTML::Defang->new(scope_id => 'a b'); 1 }, "Invalid scope_id dies");

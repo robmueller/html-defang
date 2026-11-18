@@ -788,6 +788,17 @@ each call to L</defang>. A C<media> attribute on the element becomes an
 C<@media> block around its contents. Use this to move a document's styles
 somewhere else, such as into the C<< <head> >> of the page it's embedded in.
 
+=item B<scope_id>
+
+An id for an element the output will be put inside, such as C<'qt'>, to
+keep the output's styles from applying to anything else in the page. Every
+selector in a C<< <style> >> is put under C<#qt>, with a leading C<html>,
+C<body> or C<:root> standing for that element itself; ids and classes in
+selectors and markup get a C<qt-> prefix to match each other; and so do
+C<name>s on C<< <a> >> and C<< <map> >> and the C<#> links to them. The
+caller must add the element with that id. Usually used with
+B<extract_styles>.
+
 =item B<url_policy>
 
 Set to C<'mail'> to check URLs with L</mail_url_callback>, rather than the
@@ -827,6 +838,9 @@ sub new {
   my %mismatched_tags_to_fix = %MismatchedTags;
   %mismatched_tags_to_fix = map { $_ => 1 } @$mismatched_tags_to_fix if $mismatched_tags_to_fix;
 
+  !defined $Opts{scope_id} || $Opts{scope_id} =~ /^[A-Za-z][A-Za-z0-9_-]*$/
+    or Carp::croak("Invalid scope_id: $Opts{scope_id}");
+
   my $url_callback = $Opts{url_callback};
   if (!$url_callback && defined $Opts{url_policy}) {
     $Opts{url_policy} eq 'mail'
@@ -856,6 +870,7 @@ sub new {
     quiet => $Opts{quiet},
     delete_defang_content => $Opts{delete_defang_content},
     extract_styles => $Opts{extract_styles},
+    scope_id => $Opts{scope_id},
     extracted_styles => '',
     Debug => $Opts{Debug},
   };
@@ -1854,6 +1869,11 @@ sub defang_style_text {
   # Check declaration elements for defanging
   $Self->defang_stylerule(\@Selectors, \@SelectorRules, $lcTag, $IsAttr, $AttributeHash, $HtmlR, $OutR);
 
+  # An undef selector drops its rule from the output below
+  if (defined $Self->{scope_id} && !$IsAttr) {
+    $_ = $Self->scope_selector($_) for @Selectors;
+  }
+
   my $StyleOut = "";
 
   # Re-create the style data
@@ -1881,6 +1901,140 @@ sub defang_style_text {
   warn "defang_style StyleOut=$StyleOut" if $Self->{Debug};
 
   return $StyleOut;
+}
+
+=item I<scope_selector($Selector)>
+
+With B<scope_id> set, scope a selector (or comma separated list of them)
+from a C<< <style> >> as described there, in the form given to
+B<css_callback>. Returns undef if no part of it could match inside the
+scope element, so the rule should be dropped.
+
+=cut
+sub scope_selector {
+  my ($Self, $Selector) = @_;
+  use bytes;
+
+  return $Selector if !defined $Selector || $Selector !~ /\S/;
+
+  # Only the part after any @media prelude is a selector, and at-rules
+  #  (@media, @font-face, @page) aren't
+  my @Parts = split /\0/, $Selector, -1;
+  return $Selector if $Parts[-1] =~ /^\s*\@/;
+
+  my @Scoped = grep { defined } map { $Self->scope_complex_selector($_) }
+    split_selector_list($Parts[-1]);
+  return undef if !@Scoped;
+
+  $Parts[-1] = join ", ", @Scoped;
+  return join "\0", @Parts;
+}
+
+# Split a selector list on the commas between selectors, not those inside
+#  parentheses, attribute selectors, strings or escapes
+sub split_selector_list {
+  my ($List) = @_;
+  use bytes;
+
+  my (@Selectors, $Depth);
+  my $Current = '';
+  $Depth = 0;
+  while ($List =~ m{\G(\\.|"(?:[^"\\]|\\.)*"?|'(?:[^'\\]|\\.)*'?|[^\\"'()\[\],]+|.)}gcs) {
+    my $Token = $1;
+    if ($Token eq ',' && !$Depth) {
+      push @Selectors, $Current;
+      $Current = '';
+      next;
+    }
+    $Depth++ if $Token eq '(' || $Token eq '[';
+    $Depth-- if ($Token eq ')' || $Token eq ']') && $Depth;
+    $Current .= $Token;
+  }
+  push @Selectors, $Current;
+
+  return @Selectors;
+}
+
+sub scope_complex_selector {
+  my ($Self, $Selector) = @_;
+  use bytes;
+
+  $Selector =~ s/^\s+//;
+  $Selector =~ s/\s+$//;
+  return undef if $Selector eq '';
+
+  # The scope element stands in for the document's root and body, so
+  #  "body > p" is "#qt > p", and "body.x" is "#qt.qt-x"
+  my $OnScope = 0;
+  while ($Selector =~ s/^(?:html|body|:root)(?![\w-])(\s*)//i) {
+    $OnScope = !length $1;
+    $Selector =~ s/^>\s*(?=(?:html|body|:root)(?![\w-]))//i;
+  }
+  # The scope element's siblings aren't the document's
+  return undef if $Selector =~ /^[~+]/;
+  $OnScope = 0 if $Selector eq '' || $Selector =~ /^[>\s]/;
+
+  # "* p" is just any p inside
+  $Selector =~ s/^\*\s+(?=[^\s>+~])//;
+
+  my $Prefix = "$Self->{scope_id}-";
+  my $Out = '';
+  while ($Selector =~ m{\G(?:(\\.|"(?:[^"\\]|\\.)*"?|'(?:[^'\\]|\\.)*'?)|(\[(?:[^\]"'\\]|\\.|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')*\]?)|([#.])(?=[A-Za-z_\x80-\xff\\-])|([^\\"'\[#.]+|.))}gcs) {
+    if (defined $2) {
+      $Out .= scope_attribute_selector($2, $Prefix);
+    } elsif (defined $3) {
+      $Out .= $3 . $Prefix;
+    } else {
+      $Out .= defined $1 ? $1 : $4;
+    }
+  }
+
+  my $Scope = "#$Self->{scope_id}";
+  return $Out eq '' ? $Scope : $OnScope ? "$Scope$Out" : "$Scope $Out";
+}
+
+# Prefix the value in an [id=...], [class~=...] or [for=...] selector the
+#  same way as the attribute it matches. Matching the end or middle of one
+#  doesn't need it, except for the words after a space in a class.
+sub scope_attribute_selector {
+  my ($AttributeSelector, $Prefix) = @_;
+
+  $AttributeSelector =~ m{^\[\s*(id|class|for)\s*([~|^\$*]?=)\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|([^\s\]"']+))\s*([is]?)\s*\]$}is
+    or return $AttributeSelector;
+
+  my ($Name, $Operator, $Flag) = ($1, $2, $6);
+  my $Quote = defined $4 ? "'" : '"';
+  my $Value = defined $3 ? $3 : defined $4 ? $4 : $5;
+  my $FromStart = $Operator ne '$=' && $Operator ne '*=';
+
+  if (lc $Name eq 'class') {
+    $Value =~ s/(^|\s+)(?=\S)/length $1 || $FromStart ? "$1$Prefix" : ''/ge;
+  } elsif ($FromStart) {
+    $Value = $Prefix . $Value;
+  }
+
+  return "[$Name$Operator$Quote$Value$Quote" . ($Flag ? " $Flag" : '') . "]";
+}
+
+=item I<scope_attribute($lcTag, $lcAttrKey, $AttrValR)>
+
+With B<scope_id> set, prefix an id, class or reference to one in an
+attribute value to match scoped selectors.
+
+=cut
+sub scope_attribute {
+  my ($Self, $lcTag, $lcAttrKey, $AttrValR) = @_;
+
+  my $Prefix = "$Self->{scope_id}-";
+
+  if ($lcAttrKey eq 'id' || $lcAttrKey eq 'for'
+      || ($lcAttrKey eq 'name' && ($lcTag eq 'a' || $lcTag eq 'map'))) {
+    $$AttrValR =~ s/^(\s*)(?=\S)/$1$Prefix/;
+  } elsif ($lcAttrKey eq 'class' || $lcAttrKey eq 'headers') {
+    $$AttrValR =~ s/(^|\s+)(?=\S)/$1$Prefix/g;
+  } elsif ($lcAttrKey eq 'href' || $lcAttrKey eq 'usemap') {
+    $$AttrValR =~ s/^(\s*#)(?=\S)/$1$Prefix/;
+  }
 }
 
 =item I<cleanup_style($StyleString)>
@@ -2189,6 +2343,9 @@ sub defang_attributes {
     my ($lcAttrKey, $AttrKey, $AttrValR) = ($Attr->[7], $Attr->[0], \$Attr->[4]);
 
     warn "defang_attributes Tag=$lcTag lcAttrKey=$lcAttrKey AttrVal=$$AttrValR" if $Debug;
+
+    $Self->scope_attribute($lcTag, $lcAttrKey, $AttrValR)
+      if defined $Self->{scope_id} && defined $$AttrValR;
 
     my $AttribRule = "";
     if (ref($Tags{$lcTag}) eq 'HASH') {
